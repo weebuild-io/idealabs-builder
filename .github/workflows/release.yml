@@ -273,9 +273,6 @@ jobs:
       # The steps of dist:win, run individually (its `(cmd; ec=$?; …)` subshell
       # wrapper is POSIX-only, and the rebuild-native restore step is pointless
       # on a throwaway runner).
-      - name: Install win-x64 native deps
-        working-directory: apps/desktop
-        run: bun ../../scripts/install-native-deps.ts win32-x64
       - name: Install sherpa win-x64 runtime
         working-directory: apps/desktop
         run: bun ../../scripts/install-sherpa-platforms.ts win-x64
