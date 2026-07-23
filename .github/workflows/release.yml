@@ -70,7 +70,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: weebuild-io/idealabs-vn
           ref: ${{ inputs.ref }}
@@ -78,9 +78,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies
         run: bun install --frozen-lockfile
       # worker-configuration.d.ts is gitignored; server lint/typecheck need it.
@@ -101,7 +101,7 @@ jobs:
     outputs:
       sha: ${{ steps.head.outputs.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: weebuild-io/idealabs-vn
           ref: ${{ inputs.ref }}
@@ -111,10 +111,10 @@ jobs:
         if: ${{ inputs.run-version }}
         with:
           bun-version: latest
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: ${{ inputs.run-version }}
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies
         if: ${{ inputs.run-version }}
         run: bun install --frozen-lockfile
@@ -146,7 +146,7 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: weebuild-io/idealabs-vn
           ref: ${{ needs.version.outputs.sha }}
@@ -154,9 +154,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies
         run: bun install --frozen-lockfile
       # Migrate BEFORE deploy so new code never hits a missing column.
@@ -186,7 +186,7 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: weebuild-io/idealabs-vn
           ref: ${{ needs.version.outputs.sha }}
@@ -194,9 +194,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Deploy dashboard Worker
@@ -214,7 +214,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: weebuild-io/idealabs-vn
           ref: ${{ needs.version.outputs.sha }}
@@ -222,11 +222,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
       # The TikTok sidecar is frozen with PyInstaller under a uv-managed Python.
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v9
       - name: Install dependencies
         run: bun install --frozen-lockfile
       # release-desktop.ts drives dist:mac (swift helper + sidecar freeze +
@@ -256,7 +256,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 75
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: weebuild-io/idealabs-vn
           ref: ${{ needs.version.outputs.sha }}
@@ -264,10 +264,10 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
-      - uses: astral-sh/setup-uv@v5
+          node-version: 24
+      - uses: astral-sh/setup-uv@v9
       - name: Install dependencies
         run: bun install --frozen-lockfile
       # The steps of dist:win, run individually (its `(cmd; ec=$?; …)` subshell
