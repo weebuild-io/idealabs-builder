@@ -1,0 +1,291 @@
+# Release pipeline for the PRIVATE repo weebuild-io/idealabs-vn.
+#
+# This workflow lives in a PUBLIC repo so every job runs on free GitHub-hosted
+# runner minutes (including macOS and Windows). The private repo is checked out
+# with a fine-grained PAT (secrets.PRIVATE_REPO_PAT, Contents: read+write on
+# idealabs-vn only); build output goes to Cloudflare Workers / D1 / R2 — never
+# to artifacts or releases on this repo.
+#
+# ⚠ Everything printed to the log is PUBLIC. Keep steps quiet; never echo env.
+#
+# Phase order mirrors scripts/release-tools.ts in the private repo — "the one
+# order that is safe": check → version → server (migrate then deploy) →
+# dashboard → desktop (mac / win in parallel).
+name: Release
+
+run-name: "Release ${{ inputs.ref }} · desktop=${{ inputs.desktop }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch / tag / SHA of idealabs-vn
+        type: string
+        default: main
+      run-check:
+        description: "Pre-flight: lint + format + typecheck + test"
+        type: boolean
+        default: true
+      run-version:
+        description: Lerna version bump + push commit & tags (ref must be main)
+        type: boolean
+        default: true
+      run-server:
+        description: Migrate PROD D1 + deploy server Worker
+        type: boolean
+        default: true
+      run-dashboard:
+        description: Deploy dashboard Worker
+        type: boolean
+        default: true
+      desktop:
+        description: Desktop platforms to build + upload to R2
+        type: choice
+        options:
+          - both
+          - mac
+          - win
+          - none
+        default: both
+
+# One release at a time; never cancel an in-flight prod deploy.
+concurrency: release
+
+# Jobs never touch this repo's GITHUB_TOKEN — all auth is via secrets.
+permissions: {}
+
+env:
+  # Cloudflare account owning the prod Workers + R2 bucket (weebuild.io).
+  # Pinned because the credentials can see several accounts; not a secret.
+  CLOUDFLARE_ACCOUNT_ID: 7b65de72a307a8067b76fa0179a7441d
+
+jobs:
+  check:
+    name: Pre-flight check
+    if: ${{ inputs.run-check }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: weebuild-io/idealabs-vn
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Lint + format + typecheck + test
+        run: bun run check
+
+  version:
+    name: Version (Lerna-lite)
+    needs: check
+    if: >-
+      ${{ !cancelled()
+          && (needs.check.result == 'success' || needs.check.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      sha: ${{ steps.head.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: weebuild-io/idealabs-vn
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+      - uses: oven-sh/setup-bun@v2
+        if: ${{ inputs.run-version }}
+        with:
+          bun-version: latest
+      - uses: actions/setup-node@v4
+        if: ${{ inputs.run-version }}
+        with:
+          node-version: 22
+      - name: Install dependencies
+        if: ${{ inputs.run-version }}
+        run: bun install --frozen-lockfile
+      - name: Configure git
+        if: ${{ inputs.run-version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Lerna version (conventional commits)
+        if: ${{ inputs.run-version }}
+        run: bun run release:version
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_PAT }}
+      # Binaries ship to R2; no GitHub Release is created. Tags are Lerna's
+      # record of the last release, used to compute the next bump.
+      - name: Push release commit and tags
+        if: ${{ inputs.run-version }}
+        run: git push --follow-tags origin "HEAD:${{ inputs.ref }}"
+      - name: Resolve release SHA
+        id: head
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  server:
+    name: Server — migrate PROD D1 + deploy
+    needs: version
+    if: ${{ !cancelled() && needs.version.result == 'success' && inputs.run-server }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: weebuild-io/idealabs-vn
+          ref: ${{ needs.version.outputs.sha }}
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      # Migrate BEFORE deploy so new code never hits a missing column.
+      # wrangler auto-confirms its prompt in non-interactive contexts.
+      - name: Apply pending D1 migrations (PROD)
+        working-directory: apps/server
+        run: bunx wrangler d1 migrations apply DB --remote --env production
+      - name: Deploy server Worker
+        working-directory: apps/server
+        run: bun run deploy
+      - name: Verify health
+        run: curl -fsS --retry 3 --retry-delay 5 https://idealabs.vn/server/health
+
+  dashboard:
+    name: Dashboard — deploy
+    needs: [version, server]
+    if: >-
+      ${{ !cancelled() && needs.version.result == 'success'
+          && (needs.server.result == 'success' || needs.server.result == 'skipped')
+          && inputs.run-dashboard }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: weebuild-io/idealabs-vn
+          ref: ${{ needs.version.outputs.sha }}
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Deploy dashboard Worker
+        working-directory: apps/dashboard
+        run: bun run deploy
+
+  desktop-mac:
+    name: Desktop — macOS arm64 (build + sign + notarize + upload)
+    needs: [version, server, dashboard]
+    if: >-
+      ${{ !cancelled() && needs.version.result == 'success'
+          && (needs.server.result == 'success' || needs.server.result == 'skipped')
+          && (needs.dashboard.result == 'success' || needs.dashboard.result == 'skipped')
+          && (inputs.desktop == 'both' || inputs.desktop == 'mac') }}
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: weebuild-io/idealabs-vn
+          ref: ${{ needs.version.outputs.sha }}
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # The TikTok sidecar is frozen with PyInstaller under a uv-managed Python.
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      # release-desktop.ts drives dist:mac (swift helper + sidecar freeze +
+      # electron-builder), signs with CSC_LINK (base64 .p12), notarizes, then
+      # uploads artifacts + latest-mac.yml to R2 and prunes old tags.
+      - name: Build, sign, notarize, upload to R2
+        run: bun scripts/release-desktop.ts --mac-only --yes --build-timeout 60
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+  desktop-win:
+    name: Desktop — Windows x64 (build + upload)
+    needs: [version, server, dashboard]
+    if: >-
+      ${{ !cancelled() && needs.version.result == 'success'
+          && (needs.server.result == 'success' || needs.server.result == 'skipped')
+          && (needs.dashboard.result == 'success' || needs.dashboard.result == 'skipped')
+          && (inputs.desktop == 'both' || inputs.desktop == 'win') }}
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: weebuild-io/idealabs-vn
+          ref: ${{ needs.version.outputs.sha }}
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      # The steps of dist:win, run individually (its `(cmd; ec=$?; …)` subshell
+      # wrapper is POSIX-only, and the rebuild-native restore step is pointless
+      # on a throwaway runner).
+      - name: Install win-x64 native deps
+        working-directory: apps/desktop
+        run: bun ../../scripts/install-native-deps.ts win32-x64
+      - name: Install sherpa win-x64 runtime
+        working-directory: apps/desktop
+        run: bun ../../scripts/install-sherpa-platforms.ts win-x64
+      - name: Download VC++ redistributable
+        working-directory: apps/desktop
+        run: bun ../../scripts/download-vcredist.ts
+      # Freezes the sidecar natively (no cross-compile), builds the renderer +
+      # electron main, hardens, then packs the NSIS installer — no Wine needed.
+      # Unsigned unless CSC_* secrets are added (electron-builder just warns).
+      - name: Build NSIS installer
+        working-directory: apps/desktop
+        run: bun run dist -- --win
+      - name: "Smoke: frozen sidecar exits clean on stdin EOF"
+        shell: pwsh
+        timeout-minutes: 2
+        working-directory: apps/desktop/sidecar-tiktok
+        run: |
+          cmd /c "dist\tiktok-sidecar\tiktok-sidecar.exe < NUL 1> out.txt 2> err.txt"
+          if ($LASTEXITCODE -ne 0) { Get-Content err.txt; throw "sidecar exited $LASTEXITCODE" }
+      # --skip-build reuses dist/electron from the step above: wraps each .exe
+      # in the sibling .zip the landing pages link, uploads artifacts +
+      # latest.yml to R2, prunes old tags.
+      - name: Upload to R2 (+ prune old tags)
+        run: bun scripts/release-desktop.ts --win-only --skip-build --yes
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
