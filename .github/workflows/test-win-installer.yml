@@ -1,0 +1,62 @@
+# Reproduce the desktop auto-update path on a clean Windows machine:
+# download the released NSIS exe from R2, silent-install it exactly like
+# electron-updater does (/S), then launch the installed app and verify it
+# stays alive. Used to debug field reports without a local Windows box.
+name: Test Windows installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Released desktop version to test
+        type: string
+        default: "0.25.0"
+
+permissions: {}
+
+jobs:
+  test:
+    name: Silent install + launch
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download installer from R2
+        shell: pwsh
+        run: |
+          $v = "${{ inputs.version }}"
+          $url = "https://tools-release.idealabs.vn/releases/@idealabs/desktop@$v/Idealabs Tools Setup $v.exe"
+          curl.exe -fSL -o installer.exe $url
+          Get-Item installer.exe | Select-Object Name, Length
+
+      - name: Silent install (/S) — same as electron-updater
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath .\installer.exe -ArgumentList "/S" -PassThru -Wait
+          "installer exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw "installer failed with exit $($p.ExitCode)" }
+
+      - name: Assert install layout
+        shell: pwsh
+        run: |
+          $dir = "$env:LOCALAPPDATA\Programs\Idealabs Tools"
+          if (!(Test-Path "$dir\Idealabs Tools.exe")) {
+            "install dir missing — contents of Programs:"
+            Get-ChildItem "$env:LOCALAPPDATA\Programs" -ErrorAction SilentlyContinue
+            throw "Idealabs Tools.exe not found"
+          }
+          "app dir:"; Get-ChildItem $dir | Select-Object Name, Length
+          "resources:"; Get-ChildItem "$dir\resources" | Select-Object Name
+          "sidecar:"; Get-ChildItem "$dir\resources\tiktok-sidecar" -ErrorAction SilentlyContinue | Select-Object Name | Select-Object -First 5
+
+      - name: Launch app, verify it survives 25s
+        shell: pwsh
+        run: |
+          $exe = "$env:LOCALAPPDATA\Programs\Idealabs Tools\Idealabs Tools.exe"
+          $p = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 25
+          $alive = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
+          $log = "$env:APPDATA\Idealabs Tools\logs\main.log"
+          if (Test-Path $log) { "---- main.log ----"; Get-Content $log } else { "no main.log at $log" }
+          if (-not $alive) { throw "app process exited within 25s of launch" }
+          "app alive after 25s (PID $($p.Id))"
+          Stop-Process -Id $p.Id -Force
