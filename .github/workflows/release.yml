@@ -159,8 +159,12 @@ jobs:
       - name: Deploy server Worker
         working-directory: apps/server
         run: bun run deploy
-      - name: Verify health
-        run: curl -fsS --retry 3 --retry-delay 5 https://idealabs.vn/server/health
+      # /server/health is auth-gated — a 401 still means the Worker is alive.
+      - name: Verify Worker responds
+        run: |
+          code=$(curl -sS -o /dev/null -w "%{http_code}" --retry 3 --retry-delay 5 https://idealabs.vn/server/health)
+          echo "health HTTP $code"
+          case "$code" in 2*|401) exit 0 ;; *) exit 1 ;; esac
 
   dashboard:
     name: Dashboard — deploy
