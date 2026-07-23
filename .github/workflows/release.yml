@@ -47,6 +47,10 @@ on:
           - win
           - none
         default: both
+      dry-run-desktop:
+        description: "Desktop: build + stage but skip R2 writes (pipeline test)"
+        type: boolean
+        default: false
 
 # One release at a time; never cancel an in-flight prod deploy.
 concurrency: release
@@ -225,7 +229,9 @@ jobs:
       # electron-builder), signs with CSC_LINK (base64 .p12), notarizes, then
       # uploads artifacts + latest-mac.yml to R2 and prunes old tags.
       - name: Build, sign, notarize, upload to R2
-        run: bun scripts/release-desktop.ts --mac-only --yes --build-timeout 60
+        run: >-
+          bun scripts/release-desktop.ts --mac-only --yes --build-timeout 60
+          ${{ inputs.dry-run-desktop && '--dry-run' || '' }}
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
@@ -289,7 +295,9 @@ jobs:
       # in the sibling .zip the landing pages link, uploads artifacts +
       # latest.yml to R2, prunes old tags.
       - name: Upload to R2 (+ prune old tags)
-        run: bun scripts/release-desktop.ts --win-only --skip-build --yes
+        run: >-
+          bun scripts/release-desktop.ts --win-only --skip-build --yes
+          ${{ inputs.dry-run-desktop && '--dry-run' || '' }}
         env:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
