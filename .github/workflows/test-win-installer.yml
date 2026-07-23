@@ -24,7 +24,7 @@ jobs:
         shell: pwsh
         run: |
           $v = "${{ inputs.version }}"
-          $url = "https://tools-release.idealabs.vn/releases/@idealabs/desktop@$v/Idealabs Tools Setup $v.exe"
+          $url = "https://tools-release.idealabs.vn/releases/@idealabs/desktop@$v/Idealabs%20Tools%20Setup%20$v.exe"
           curl.exe -fSL -o installer.exe $url
           Get-Item installer.exe | Select-Object Name, Length
 
