@@ -118,6 +118,11 @@ jobs:
       - name: Install dependencies
         if: ${{ inputs.run-version }}
         run: bun install --frozen-lockfile
+      # lerna's `git commit` fires the lefthook pre-commit (lint + format);
+      # server lint needs the gitignored worker-configuration.d.ts present.
+      - name: Generate Cloudflare Worker types
+        if: ${{ inputs.run-version }}
+        run: bun run typegen:cf
       - name: Configure git
         if: ${{ inputs.run-version }}
         run: |
