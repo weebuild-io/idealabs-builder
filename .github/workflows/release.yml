@@ -220,7 +220,12 @@ jobs:
           && (needs.server.result == 'success' || needs.server.result == 'skipped')
           && (needs.dashboard.result == 'success' || needs.dashboard.result == 'skipped')
           && (inputs.desktop == 'both' || inputs.desktop == 'mac') }}
-    runs-on: macos-latest
+    # Pinned to macos-15: the macos-26 image (20260831+, Darwin 25.6) rejects the
+    # wrong keychain password electron-builder 26.15.x passes to
+    # `security set-key-partition-list` (electron-builder#10066). Fix landed in
+    # PR #10101 but is not yet published for v26. Revert to macos-latest once
+    # electron-builder 26.16.1+ is in the lockfile.
+    runs-on: macos-15
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
